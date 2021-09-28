@@ -1,0 +1,249 @@
+             +--------------------------+
+             |          CS 140          |
+             | PROJECT 2: USER PROGRAMS |
+             |     DESIGN DOCUMENT      |
+             +--------------------------+
+
+---- GROUP ----
+
+>> Fill in the names and email addresses of your group members.
+
+Zhichen Zhang <zhangzhch2@shanghaitech.edu.cn>
+Lanhe Gao <gaolh@shanghaitech.edu.cn>
+FirstName LastName <email@domain.example>
+
+---- PRELIMINARIES ----
+
+>> If you have any preliminary comments on your submission, notes for the
+>> TAs, or extra credit, please give them here.
+
+>> Please cite any offline or online sources you consulted while
+>> preparing your submission, other than the Pintos documentation, course
+>> text, lecture notes, and course staff.
+
+               ARGUMENT PASSING
+               ================
+
+---- DATA STRUCTURES ----
+
+>> A1: Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', or
+>> enumeration.  Identify the purpose of each in 25 words or less.
+
+We implemented two new struct TCB and fileDescriptor in thread.h
+As the names suggest, struct TCB is the thread control block in a thread, which is implemented to better manage the thread; and struct fileDescriptor is implemented to help manage the file in the operating system.
+As for the variables in the struct, their usage is described in the comments.
+    struct TCB{
+      tid_t tid;
+      bool waitedBefore;      /*flag, thread has waited before?*/
+      bool exit;              /*flag, ready to exit?*/
+      bool remove;            /*flag, ready to be removed?*/
+      int exit_code;          /*exit_code to show the thread's status when exiting*/
+      char *argv;             /*arguments*/
+      char *program_name;     /*program name for the thread*/
+      struct list_elem elem;  /*list element*/
+      struct semaphore sema;  /*semaphore*/
+      struct semaphore wait;  /*semaphore that indicate if the thread's waiting status*/
+    };
+    struct fileDescriptor{
+      int fD_id;              /*file id*/
+      struct file *file;      /*the file*/
+      struct thread *t;       /*the thread this fileDescriptor belongs to */
+      struct list_elem elem;  /*list element*/
+    };
+
+We also added some variables in the thread struct, their usage is described in the comments*/
+    struct TCB *TCB;                    /* current thread's TCB*/
+    struct list child_TCB;              /* the list that stores the children threads' TCB*/
+    struct list fD;                     /* the list that stores the fileDescriptor*/
+    struct file *currentFile;           /* the current file*/
+
+---- ALGORITHMS ----
+
+>> A2: Briefly describe how you implemented argument parsing.  How do
+>> you arrange for the elements of argv[] to be in the right order?
+>> How do you avoid overflowing the stack page?
+
+First, in process_execute(), we seperate the program name from the command line and use this name to create a new thread.
+Then, in start_process(), we seperate the command line into tokens and store them according to the order they were extracted. After extraction, we put the arguments to the stack one after another according to the extraction order.
+
+Because we put the variables onto the stack according to the extraction order, the argv[] are naturally in the right order.
+To avoid stack overflow, we declared a variable to keep track of the variable numbers and the stack size as we seperate the command line, we change the stack pointer according to the stack size we get, and allocate stack dynamically. Therefore, there won't be a stack overflow.
+
+---- RATIONALE ----
+
+>> A3: Why does Pintos implement strtok_r() but not strtok()?
+
+The difference between strtok_r() and strtok() is that the save_ptr in strtok_r() is provided by the caller. And because we need to seperate the command line into tokens, we need to put the address of the arguments somewhere we can use later.
+
+>> A4: In Pintos, the kernel separates commands into a executable name
+>> and arguments.  In Unix-like systems, the shell does this
+>> separation.  Identify at least two advantages of the Unix approach.
+
+1. Unix approach needs to spend less time in the kernel.
+2. We can check the arguments before passing them to the kernel in the Unix approach. In this way, we can avoid potential failure that might be caused by the arguments.
+3. We can also do some pre-processing on the arguments before passing them to the kernel to improve the performance.
+
+
+                 SYSTEM CALLS
+                 ============
+
+---- DATA STRUCTURES ----
+
+>> B1: Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', or
+>> enumeration.  Identify the purpose of each in 25 words or less.
+typedef int pid_t
+
+fileDespcriptor{
+int fD_num; /* the id of fd.*/
+struct file *f; /* file it is associated to.*/
+struct thread *t /* the thread who owns it. */
+struct list_elem elem; /* insert or remove. */
+}
+
+>> B2: Describe how file descriptors are associated with open files.
+>> Are file descriptors unique within the entire OS or just within a
+>> single process?
+
+file descriptors are called when a process wants to open a file. use 
+file system to open it and convey it to the fd. then give the file 
+its own id, master thread. file descriptors are unique within a single 
+process. A file can be associated with multiple file descriptors.
+
+---- ALGORITHMS ----
+
+>> B3: Describe your code for reading and writing user data from the
+>> kernel.
+
+Reading: First, check memory spaces one by one to see if it's valid. Then, 
+check if the id of the fd is valid, or a input or output file. If so, exit(-1).
+Then, if all of these checks are passed, we need to find if the current 
+thread owns the fd needed. If not, exit(-1). Otherwise, use file_read()
+to read this file.
+
+Writing: First, check memory spaces and the buffer one by one to see 
+if it's valid. Then, check if the file is output or input file. If output, 
+use putbuf() to write to buffer. If input, exit(-1). Then, check if the 
+current thread owns a fd that points to this file. If so, use file_write()
+to write to file. Otherwise, exit(-1).
+
+>> B4: Suppose a system call causes a full page (4,096 bytes) of data
+>> to be copied from user space into the kernel.  What is the least
+>> and the greatest possible number of inspections of the page table
+>> (e.g. calls to pagedir_get_page()) that might result?  What about
+>> for a system call that only copies 2 bytes of data?  Is there room
+>> for improvement in these numbers, and how much?
+
+1) At least 1. If pagedir_get_page() managed to get the header of the 
+page, we don't have to use it to inspect any more. If the page is sparse, 
+we have to check every address for all the data, so we need 4096 inspe-
+ctions. If the page is continuous, we only need 2 inspections, by checking 
+the page head and page tail.
+
+2) At least 1 for the same reason in 1). The greatest number would be 
+2. No matter it's continuous or not, if we only get 1 byte from the 
+tail of the page, we need to find the other byte.
+
+>> B5: Briefly describe your implementation of the "wait" system call
+>> and how it interacts with process termination.
+
+syscall "wait" only needs to call the function process_wait(). In process_wait(),
+we first find all the child threads of the current thread. Then, check if they've
+been waiting before, or else, exit(-1). Then, the semaphore in tcb we 
+implemented does p operation, to wait for the child thread to finish execution. 
+Then, get the exit_code from tcb, and remove the child thread after it finishes. 
+Finally, free tcb and exit(exit_code).
+
+>> B6: Any access to user program memory at a user-specified address
+>> can fail due to a bad pointer value.  Such accesses must cause the
+>> process to be terminated.  System calls are fraught with such
+>> accesses, e.g. a "write" system call requires reading the system
+>> call number from the user stack, then each of the call's three
+>> arguments, then an arbitrary amount of user memory, and any of
+>> these can fail at any point.  This poses a design and
+>> error-handling problem: how do you best avoid obscuring the primary
+>> function of code in a morass of error-handling?  Furthermore, when
+>> an error is detected, how do you ensure that all temporarily
+>> allocated resources (locks, buffers, etc.) are freed?  In a few
+>> paragraphs, describe the strategy or strategies you adopted for
+>> managing these issues.  Give an example.
+
+We implemented a function called check_memory(), which 
+detects invalidation, null and etc. from the memory space that this 
+syscall needs to read from. If all these occasions are detected, immediately 
+calls syscall "exit" to end this process with exit code -1. In syscall "exit", 
+we called function thread_exit(), and in which there's another function 
+call: process_exit(). These two functions ensure that all the memory 
+allocated will be freed by palloc_free_page(). Thus, there won't be any 
+memory leak.
+
+---- SYNCHRONIZATION ----
+
+>> B7: The "exec" system call returns -1 if loading the new executable
+>> fails, so it cannot return before the new executable has completed
+>> loading.  How does your code ensure this?  How is the load
+>> success/failure status passed back to the thread that calls "exec"?
+
+We set the exit_code in tcb, such that if the load fails, we immediately
+call syscall "exit", and then return -1 back to the tcb of the thread
+that calls the syscall "exec".
+
+>> B8: Consider parent process P with child process C.  How do you
+>> ensure proper synchronization and avoid race conditions when P
+>> calls wait(C) before C exits?  After C exits?  How do you ensure
+>> that all resources are freed in each case?  How about when P
+>> terminates without waiting, before C exits?  After C exits?  Are
+>> there any special cases?
+
+When calling wait(C), we first check if this thread is already waiting, or 
+already have finished execution. This exempts from waiting for a thread 
+that has already exited. Then, we used semaphore to make sure only one
+child thread can be executing simutaneously. palloc_free_page() is called to 
+make sure tcb is freed. P can not exit before C exits because semaphore 
+make sure only when semaphore use v operation, which is when all child
+threads are done. No special cases that we can think of. 
+
+---- RATIONALE ----
+
+>> B9: Why did you choose to implement access to user memory from the
+>> kernel in the way that you did?
+
+Because the first way is more simple and direct. Also, modifying the palloc 
+function is very adventurous, might causing the whole system's failure.
+
+>> B10: What advantages or disadvantages can you see to your design
+>> for file descriptors?
+
+Simple and direct. Takes up little space by only implementing 4 members.
+
+>> B11: The default tid_t to pid_t mapping is the identity mapping.
+>> If you changed it, what advantages are there to your approach?
+
+We didn't change it. The tid returned by thread_create() is the pid of
+this process.
+
+               SURVEY QUESTIONS
+               ================
+
+Answering these questions is optional, but it will help us improve the
+course in future quarters.  Feel free to tell us anything you
+want--these questions are just to spur your thoughts.  You may also
+choose to respond anonymously in the course evaluations at the end of
+the quarter.
+
+>> In your opinion, was this assignment, or any one of the three problems
+>> in it, too easy or too hard?  Did it take too long or too little time?
+
+>> Did you find that working on a particular part of the assignment gave
+>> you greater insight into some aspect of OS design?
+
+>> Is there some particular fact or hint we should give students in
+>> future quarters to help them solve the problems?  Conversely, did you
+>> find any of our guidance to be misleading?
+
+>> Do you have any suggestions for the TAs to more effectively assist
+>> students, either for future quarters or the remaining projects?
+
+>> Any other comments?
+
